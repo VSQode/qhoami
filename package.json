@@ -1,0 +1,52 @@
+{
+	"name": "qhoami",
+	"displayName": "qhoami",
+	"description": "Session ID extraction for VS Code chat agents",
+	"version": "0.1.5",
+	"publisher": "vgm9",
+	"engines": {
+		"vscode": "^1.95.0"
+	},
+	"categories": [
+		"Other"
+	],
+	"activationEvents": [
+		"onStartupFinished"
+	],
+	"main": "./out/extension.js",
+	"contributes": {
+		"languageModelTools": [
+			{
+				"name": "qhoami",
+				"displayName": "Get Session ID",
+				"canBeReferencedInPrompt": true,
+				"toolReferenceName": "qhoami",
+				"icon": "$(account)",
+				"userDescription": "Get your current chat session ID",
+				"modelDescription": "Returns the definitive current chat session ID from toolInvocationToken. No parameters needed. This is the ONLY reliable way to get YOUR session ID.",
+				"inputSchema": {
+					"type": "object",
+					"properties": {},
+					"required": []
+				}
+			}
+		]
+	},
+	"scripts": {
+		"vscode:prepublish": "npm run compile",
+		"compile": "tsc -p ./",
+		"watch": "tsc -watch -p ./",
+		"package": "npx vsce package --allow-missing-repository -o qhoami.vsix"
+	},
+	"devDependencies": {
+		"@types/node": "^22.10.5",
+		"@types/vscode": "^1.95.0",
+		"@vscode/vsce": "^3.7.1",
+		"typescript": "^5.9.3"
+	},
+	"__metadata": {
+		"installedTimestamp": 1770954935059,
+		"targetPlatform": "undefined",
+		"size": 11869
+	}
+}
