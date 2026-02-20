@@ -1,18 +1,10 @@
 /**
- * qhoami - Session ID extraction for VS Code chat agents
- *
- * Returns the current session ID, workspace hash, and ground-truth reboot count.
- * Also provides a persistent status bar item showing KQ.patch (qhoami#2).
+ * extension.ts — Orchestrator only. Wires up status bars, commands, tool, and probe.
  *
  * History:
- *   0.1.0-0.1.4 — used token.sessionId (VS Code <1.110)
- *   0.1.5       — added token.sessionResource fallback (VS Code 1.110+)
- *   0.2.0       — CLI: ground-truth reboot counting (MD5 hash transitions)
- *   0.3.0       — Extension: adds workspaceHash + rebootCount to output
- *   0.4.0       — Extension: delegates parsing to lib.ts (no code duplication)
- *   0.5.0       — Extension: status bar item showing KQ.patch (qhoami#2)
- *   0.6.0       — Extension: second status bar item with requestsSinceCompaction (qhoami#3)
- *   0.7.0       — Extension: write context.probe to hermes inbox for context-aware dispatch
+ *   0.1.0-0.7.0 — monolithic; all logic lived here
+ *   0.8.0       — refactored: scm.ts, ui.ts, probe.ts, tool.ts extracted;
+ *                 added SCM state bar (qhoami#7) via vscode.git extension API
  */
 import * as vscode from 'vscode';
 export declare function activate(context: vscode.ExtensionContext): void;
