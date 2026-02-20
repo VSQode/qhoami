@@ -1,5 +1,5 @@
 {
-	"name": "@vsqode/qhoami",
+	"name": "qhoami",
 	"displayName": "qhoami",
 	"description": "Session identity + reboot counting for VS Code agents — standalone Node library + extension",
 	"version": "0.4.0",
