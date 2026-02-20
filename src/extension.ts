@@ -1,90 +1,28 @@
 /**
  * qhoami - Session ID extraction for VS Code chat agents
- * 
+ *
  * Returns the current session ID, workspace hash, and ground-truth reboot count.
  * Implements VSQode/qhoami#4 (minimal extension output).
- * 
+ *
  * History:
  *   0.1.0-0.1.4 — used token.sessionId (VS Code <1.110)
  *   0.1.5       — added token.sessionResource fallback (VS Code 1.110+)
  *   0.2.0       — CLI: ground-truth reboot counting (MD5 hash transitions)
  *   0.3.0       — Extension: adds workspaceHash + rebootCount to output
+ *   0.4.0       — Extension: delegates parsing to lib.ts (no code duplication)
  */
 
 import * as vscode from 'vscode';
-import * as fs from 'fs';
 import * as path from 'path';
-import * as crypto from 'crypto';
-import * as os from 'os';
+import { parseSessionFile, extractReboots } from './lib';
 
-// ─── JSONL session parsing (duplicated from cli.ts for extension-host use) ──
-
-const REBOOT_MARKERS = new Set([
-  'Summarized conversation history',
-  'Compacted conversation',
-]);
-
-function _parseSessionFile(filePath: string): any | null {
-  try {
-    const raw = fs.readFileSync(filePath, 'utf-8').trimEnd();
-    if (filePath.endsWith('.jsonl')) {
-      const lines = raw.split('\n').filter(l => l.trim());
-      if (!lines.length) return null;
-      const first = JSON.parse(lines[0]);
-      if (first.kind !== 0) return null;
-      let data = first.v;
-      for (let i = 1; i < lines.length; i++) {
-        const patch = JSON.parse(lines[i]);
-        if (patch.kind !== 1 || !Array.isArray(patch.k)) continue;
-        const keys: (string | number)[] = patch.k;
-        let obj: any = data;
-        for (let j = 0; j < keys.length - 1; j++) {
-          const k = keys[j];
-          if (obj[k] === undefined || obj[k] === null) {
-            obj[k] = typeof keys[j + 1] === 'number' ? [] : {};
-          }
-          obj = obj[k];
-        }
-        obj[keys[keys.length - 1]] = patch.v;
-      }
-      return data;
-    } else {
-      return JSON.parse(raw);
-    }
-  } catch { return null; }
-}
-
-function _countRebootsGroundTruth(data: any): number {
-  const requests: any[] = data.requests || [];
-  let prevHash: string | null = null;
-  let count = 0;
-  for (let i = 0; i < requests.length; i++) {
-    const req = requests[i];
-    if (!req) continue;
-    for (const resp of (req.response || [])) {
-      if (resp.kind === 'progressTaskSerialized' || resp.kind === 'progressTask') {
-        const val = (resp.content || {}).value;
-        if (REBOOT_MARKERS.has(val)) {
-          const summaryText: string | null = req.result?.metadata?.summary?.text ?? null;
-          if (summaryText !== null && summaryText !== undefined) {
-            const hash = crypto.createHash('md5').update(summaryText).digest('hex');
-            if (hash !== prevHash) {
-              count++;
-              prevHash = hash;
-            }
-          }
-          break;
-        }
-      }
-    }
-  }
-  return count;
-}
-
-function _getSessionFilePath(workspaceHash: string, sessionId: string): string | null {
-  const base = _getAppDataBase();
-  if (!base) return null;
-  const dir = path.join(base, 'workspaceStorage', workspaceHash, 'chatSessions');
+function _getSessionFilePath(
+  appDataBase: string,
+  workspaceHash: string,
+  sessionId: string,
+): string | null {
+  const dir = path.join(appDataBase, 'workspaceStorage', workspaceHash, 'chatSessions');
+  const fs = require('fs') as typeof import('fs');
   for (const ext of ['.jsonl', '.json']) {
     const p = path.join(dir, `${sessionId}${ext}`);
     if (fs.existsSync(p)) return p;
@@ -94,6 +32,7 @@ function _getSessionFilePath(workspaceHash: string, sessionId: string): string |
 
 function _getAppDataBase(): string | null {
   try {
+    const os = require('os') as typeof import('os');
     if (process.platform === 'win32') {
       const appData = process.env.APPDATA;
       if (!appData) return null;
@@ -120,18 +59,22 @@ function _getWorkspaceHash(context: vscode.ExtensionContext): string | null {
 
 export function activate(context: vscode.ExtensionContext) {
   const workspaceHash = _getWorkspaceHash(context);
-  const tool = vscode.lm.registerTool('qhoami', new QhoamiTool(workspaceHash));
+  const appDataBase = _getAppDataBase();
+  const tool = vscode.lm.registerTool('qhoami', new QhoamiTool(workspaceHash, appDataBase));
   context.subscriptions.push(tool);
 }
 
 export function deactivate() {}
 
 class QhoamiTool implements vscode.LanguageModelTool<{}> {
-  constructor(private readonly workspaceHash: string | null) {}
+  constructor(
+    private readonly workspaceHash: string | null,
+    private readonly appDataBase: string | null,
+  ) {}
 
   async invoke(
     options: vscode.LanguageModelToolInvocationOptions<{}>,
-    _token: vscode.CancellationToken
+    _token: vscode.CancellationToken,
   ): Promise<vscode.LanguageModelToolResult> {
     try {
       // VS Code <1.110: token.sessionId (plain string UUID)
@@ -168,20 +111,20 @@ class QhoamiTool implements vscode.LanguageModelTool<{}> {
             method: 'none',
             tokenKeys,
             tokenRaw: token ? JSON.stringify(token) : null,
-            note: 'VS Code API may have changed again — check token shape'
-          }, null, 2))
+            note: 'VS Code API may have changed again — check token shape',
+          }, null, 2)),
         ]);
       }
 
       // Compute reboot count from session JSONL file
       let rebootCount: number | null = null;
-      if (this.workspaceHash && sessionId) {
+      if (this.workspaceHash && this.appDataBase && sessionId) {
         try {
-          const sessionFilePath = _getSessionFilePath(this.workspaceHash, sessionId);
+          const sessionFilePath = _getSessionFilePath(this.appDataBase, this.workspaceHash, sessionId);
           if (sessionFilePath) {
-            const data = _parseSessionFile(sessionFilePath);
+            const data = parseSessionFile(sessionFilePath);
             if (data) {
-              rebootCount = _countRebootsGroundTruth(data);
+              rebootCount = extractReboots(data).groundTruth;
             }
           }
         } catch { /* rebootCount stays null — non-fatal */ }
@@ -197,18 +140,17 @@ class QhoamiTool implements vscode.LanguageModelTool<{}> {
           method,
           machineId: vscode.env.machineId,
           appName: vscode.env.appName,
-          note: 'sessionId is YOUR definitive session ID. rebootCount uses ground-truth MD5 hash transitions.'
-        }, null, 2))
+          note: 'sessionId is YOUR definitive session ID. rebootCount uses ground-truth MD5 hash transitions.',
+        }, null, 2)),
       ]);
     } catch (error: any) {
       return new vscode.LanguageModelToolResult([
         new vscode.LanguageModelTextPart(JSON.stringify({
           success: false,
           error: error.message,
-          stack: error.stack
-        }, null, 2))
+          stack: error.stack,
+        }, null, 2)),
       ]);
     }
   }
 }
-

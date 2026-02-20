@@ -10,6 +10,7 @@
  *   0.1.5       — added token.sessionResource fallback (VS Code 1.110+)
  *   0.2.0       — CLI: ground-truth reboot counting (MD5 hash transitions)
  *   0.3.0       — Extension: adds workspaceHash + rebootCount to output
+ *   0.4.0       — Extension: delegates parsing to lib.ts (no code duplication)
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -48,83 +49,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
-const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
-const crypto = __importStar(require("crypto"));
-const os = __importStar(require("os"));
-// ─── JSONL session parsing (duplicated from cli.ts for extension-host use) ──
-const REBOOT_MARKERS = new Set([
-    'Summarized conversation history',
-    'Compacted conversation',
-]);
-function _parseSessionFile(filePath) {
-    try {
-        const raw = fs.readFileSync(filePath, 'utf-8').trimEnd();
-        if (filePath.endsWith('.jsonl')) {
-            const lines = raw.split('\n').filter(l => l.trim());
-            if (!lines.length)
-                return null;
-            const first = JSON.parse(lines[0]);
-            if (first.kind !== 0)
-                return null;
-            let data = first.v;
-            for (let i = 1; i < lines.length; i++) {
-                const patch = JSON.parse(lines[i]);
-                if (patch.kind !== 1 || !Array.isArray(patch.k))
-                    continue;
-                const keys = patch.k;
-                let obj = data;
-                for (let j = 0; j < keys.length - 1; j++) {
-                    const k = keys[j];
-                    if (obj[k] === undefined || obj[k] === null) {
-                        obj[k] = typeof keys[j + 1] === 'number' ? [] : {};
-                    }
-                    obj = obj[k];
-                }
-                obj[keys[keys.length - 1]] = patch.v;
-            }
-            return data;
-        }
-        else {
-            return JSON.parse(raw);
-        }
-    }
-    catch {
-        return null;
-    }
-}
-function _countRebootsGroundTruth(data) {
-    const requests = data.requests || [];
-    let prevHash = null;
-    let count = 0;
-    for (let i = 0; i < requests.length; i++) {
-        const req = requests[i];
-        if (!req)
-            continue;
-        for (const resp of (req.response || [])) {
-            if (resp.kind === 'progressTaskSerialized' || resp.kind === 'progressTask') {
-                const val = (resp.content || {}).value;
-                if (REBOOT_MARKERS.has(val)) {
-                    const summaryText = req.result?.metadata?.summary?.text ?? null;
-                    if (summaryText !== null && summaryText !== undefined) {
-                        const hash = crypto.createHash('md5').update(summaryText).digest('hex');
-                        if (hash !== prevHash) {
-                            count++;
-                            prevHash = hash;
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-    }
-    return count;
-}
-function _getSessionFilePath(workspaceHash, sessionId) {
-    const base = _getAppDataBase();
-    if (!base)
-        return null;
-    const dir = path.join(base, 'workspaceStorage', workspaceHash, 'chatSessions');
+const lib_1 = require("./lib");
+function _getSessionFilePath(appDataBase, workspaceHash, sessionId) {
+    const dir = path.join(appDataBase, 'workspaceStorage', workspaceHash, 'chatSessions');
+    const fs = require('fs');
     for (const ext of ['.jsonl', '.json']) {
         const p = path.join(dir, `${sessionId}${ext}`);
         if (fs.existsSync(p))
@@ -134,6 +63,7 @@ function _getSessionFilePath(workspaceHash, sessionId) {
 }
 function _getAppDataBase() {
     try {
+        const os = require('os');
         if (process.platform === 'win32') {
             const appData = process.env.APPDATA;
             if (!appData)
@@ -167,13 +97,15 @@ function _getWorkspaceHash(context) {
 // ─────────────────────────────────────────────────────────────────────────────
 function activate(context) {
     const workspaceHash = _getWorkspaceHash(context);
-    const tool = vscode.lm.registerTool('qhoami', new QhoamiTool(workspaceHash));
+    const appDataBase = _getAppDataBase();
+    const tool = vscode.lm.registerTool('qhoami', new QhoamiTool(workspaceHash, appDataBase));
     context.subscriptions.push(tool);
 }
 function deactivate() { }
 class QhoamiTool {
-    constructor(workspaceHash) {
+    constructor(workspaceHash, appDataBase) {
         this.workspaceHash = workspaceHash;
+        this.appDataBase = appDataBase;
     }
     async invoke(options, _token) {
         try {
@@ -205,19 +137,19 @@ class QhoamiTool {
                         method: 'none',
                         tokenKeys,
                         tokenRaw: token ? JSON.stringify(token) : null,
-                        note: 'VS Code API may have changed again — check token shape'
-                    }, null, 2))
+                        note: 'VS Code API may have changed again — check token shape',
+                    }, null, 2)),
                 ]);
             }
             // Compute reboot count from session JSONL file
             let rebootCount = null;
-            if (this.workspaceHash && sessionId) {
+            if (this.workspaceHash && this.appDataBase && sessionId) {
                 try {
-                    const sessionFilePath = _getSessionFilePath(this.workspaceHash, sessionId);
+                    const sessionFilePath = _getSessionFilePath(this.appDataBase, this.workspaceHash, sessionId);
                     if (sessionFilePath) {
-                        const data = _parseSessionFile(sessionFilePath);
+                        const data = (0, lib_1.parseSessionFile)(sessionFilePath);
                         if (data) {
-                            rebootCount = _countRebootsGroundTruth(data);
+                            rebootCount = (0, lib_1.extractReboots)(data).groundTruth;
                         }
                     }
                 }
@@ -233,8 +165,8 @@ class QhoamiTool {
                     method,
                     machineId: vscode.env.machineId,
                     appName: vscode.env.appName,
-                    note: 'sessionId is YOUR definitive session ID. rebootCount uses ground-truth MD5 hash transitions.'
-                }, null, 2))
+                    note: 'sessionId is YOUR definitive session ID. rebootCount uses ground-truth MD5 hash transitions.',
+                }, null, 2)),
             ]);
         }
         catch (error) {
@@ -242,8 +174,8 @@ class QhoamiTool {
                 new vscode.LanguageModelTextPart(JSON.stringify({
                     success: false,
                     error: error.message,
-                    stack: error.stack
-                }, null, 2))
+                    stack: error.stack,
+                }, null, 2)),
             ]);
         }
     }
