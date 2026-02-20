@@ -3,7 +3,7 @@
  * qhoami - Session ID extraction for VS Code chat agents
  *
  * Returns the current session ID, workspace hash, and ground-truth reboot count.
- * Implements VSQode/qhoami#4 (minimal extension output).
+ * Also provides a persistent status bar item showing KQ.patch (qhoami#2).
  *
  * History:
  *   0.1.0-0.1.4 — used token.sessionId (VS Code <1.110)
@@ -11,6 +11,7 @@
  *   0.2.0       — CLI: ground-truth reboot counting (MD5 hash transitions)
  *   0.3.0       — Extension: adds workspaceHash + rebootCount to output
  *   0.4.0       — Extension: delegates parsing to lib.ts (no code duplication)
+ *   0.5.0       — Extension: status bar item showing KQ.patch (qhoami#2)
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -51,9 +52,10 @@ exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const path = __importStar(require("path"));
 const lib_1 = require("./lib");
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function _getSessionFilePath(appDataBase, workspaceHash, sessionId) {
-    const dir = path.join(appDataBase, 'workspaceStorage', workspaceHash, 'chatSessions');
     const fs = require('fs');
+    const dir = path.join(appDataBase, 'workspaceStorage', workspaceHash, 'chatSessions');
     for (const ext of ['.jsonl', '.json']) {
         const p = path.join(dir, `${sessionId}${ext}`);
         if (fs.existsSync(p))
@@ -94,14 +96,115 @@ function _getWorkspaceHash(context) {
         return null;
     }
 }
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Status Bar (qhoami#2) ─────────────────────────────────────────────────────
+const SCCD_THRESHOLD = 12;
+/**
+ * Build the display label: "⟲ 0.0.10" or "⚠️ 0.0.12" when approaching SCCD
+ */
+function _statusBarLabel(identity) {
+    if (!identity || identity.patch === 0 && identity.sessionBirthOrder === -1) {
+        return '$(sync) qhoami';
+    }
+    const kq = identity.kq ?? identity.cq ?? `0.?.${identity.patch}`;
+    const prefix = identity.patch >= SCCD_THRESHOLD ? '$(warning)' : '$(sync)';
+    return `${prefix} ${kq}`;
+}
+/**
+ * Build the tooltip shown on hover.
+ */
+function _statusBarTooltip(identity) {
+    if (!identity || identity.sessionBirthOrder === -1) {
+        return 'qhoami: no session data (reload to refresh)';
+    }
+    const sccdNote = identity.patch >= SCCD_THRESHOLD
+        ? `\n\n**⚠️ SCCD RISK** — patch ${identity.patch} >= ${SCCD_THRESHOLD}. Consider wrapping up soon.`
+        : '';
+    const sephira = _sephiraForPatch(identity.patch);
+    const md = new vscode.MarkdownString(`**qhoami — Q-Semver Identity**\n\n` +
+        `| Field | Value |\n` +
+        `|---|---|\n` +
+        `| Session ID | \`${identity.sessionId ?? 'unknown'}\` |\n` +
+        `| CQ | \`${identity.cq}\` |\n` +
+        `| KQ | \`${identity.kq ?? 'unassigned'}\` |\n` +
+        `| Patch (reboots) | ${identity.patch} |\n` +
+        `| Birth order | ${identity.sessionBirthOrder} / ${identity.totalSessionsInHash} sessions |\n` +
+        `| Last reboot | ${identity.lastRebootAt ?? 'never'} |\n` +
+        `| Sephira | ${sephira} |\n` +
+        sccdNote);
+    md.isTrusted = true;
+    return md;
+}
+/**
+ * Sefirotic position by patch number (Lightning Flash descent + Serpent ascent).
+ * Purely cosmetic — a meditation on where in the cycle we are.
+ */
+function _sephiraForPatch(patch) {
+    if (patch <= 0)
+        return 'Kether (0) — first light';
+    if (patch <= 3)
+        return 'Chokmah/Binah — early descent';
+    if (patch <= 6)
+        return 'Chesed/Gevurah — middle pillars';
+    if (patch <= 9)
+        return 'Tiphareth — solar midpoint';
+    if (patch <= 12)
+        return 'Netzach/Hod — lower descent';
+    if (patch <= 15)
+        return 'Yesod — foundation';
+    if (patch <= 21)
+        return 'Malkuth — grounded';
+    return `Da\'ath (hidden) — patch ${patch} beyond the tree`;
+}
+/**
+ * Show identity JSON in a new editor tab (click handler for status bar item).
+ */
+async function _showIdentityDocument(identity) {
+    const content = JSON.stringify(identity ?? { error: 'no session data' }, null, 2);
+    const doc = await vscode.workspace.openTextDocument({
+        content,
+        language: 'json',
+    });
+    await vscode.window.showTextDocument(doc, { preview: true });
+}
+// ── Activate ─────────────────────────────────────────────────────────────────
 function activate(context) {
     const workspaceHash = _getWorkspaceHash(context);
     const appDataBase = _getAppDataBase();
+    // ─ Status bar item (qhoami#2) ─
+    const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    statusBarItem.command = 'qhoami.showIdentity';
+    statusBarItem.text = '$(sync) qhoami';
+    statusBarItem.tooltip = 'qhoami: reading identity...';
+    statusBarItem.show();
+    context.subscriptions.push(statusBarItem);
+    // ─ Show identity command (click target) ─
+    let lastIdentity = null;
+    const showCmd = vscode.commands.registerCommand('qhoami.showIdentity', async () => {
+        await _showIdentityDocument(lastIdentity);
+    });
+    context.subscriptions.push(showCmd);
+    // ─ Read identity once at startup (async, non-blocking) ─
+    setTimeout(() => {
+        try {
+            const identity = (0, lib_1.computeQSemver)({
+                appdataPath: appDataBase ?? undefined,
+                workspaceHash: workspaceHash ?? undefined,
+            });
+            lastIdentity = identity;
+            statusBarItem.text = _statusBarLabel(identity);
+            statusBarItem.tooltip = _statusBarTooltip(identity);
+        }
+        catch (e) {
+            statusBarItem.text = '$(error) qhoami';
+            statusBarItem.tooltip = `qhoami error: ${e.message}`;
+        }
+    }, 2000); // 2s delay to let workspace hash resolve
+    // ─ Tool registration ─
     const tool = vscode.lm.registerTool('qhoami', new QhoamiTool(workspaceHash, appDataBase));
     context.subscriptions.push(tool);
 }
 function deactivate() { }
+// ── QhoamiTool ────────────────────────────────────────────────────────────────
 class QhoamiTool {
     constructor(workspaceHash, appDataBase) {
         this.workspaceHash = workspaceHash;
