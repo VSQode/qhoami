@@ -12,6 +12,7 @@
  *   0.4.0       — Extension: delegates parsing to lib.ts (no code duplication)
  *   0.5.0       — Extension: status bar item showing KQ.patch (qhoami#2)
  *   0.6.0       — Extension: second status bar item with requestsSinceCompaction (qhoami#3)
+ *   0.7.0       — Extension: write context.probe to hermes inbox for context-aware dispatch
  */
 import * as vscode from 'vscode';
 export declare function activate(context: vscode.ExtensionContext): void;

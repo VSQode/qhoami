@@ -12,6 +12,7 @@
  *   0.4.0       — Extension: delegates parsing to lib.ts (no code duplication)
  *   0.5.0       — Extension: status bar item showing KQ.patch (qhoami#2)
  *   0.6.0       — Extension: second status bar item with requestsSinceCompaction (qhoami#3)
+ *   0.7.0       — Extension: write context.probe to hermes inbox for context-aware dispatch
  */
 
 import * as vscode from 'vscode';
@@ -176,11 +177,39 @@ async function _showIdentityDocument(identity: QSemverResult | null): Promise<vo
   await vscode.window.showTextDocument(doc, { preview: true });
 }
 
+// ── Context Probe (hermes integration) ───────────────────────────────────────
+
+/**
+ * Write a context probe file to the hermes inbox so hermes can make
+ * context-aware dispatch decisions (warn at 80%, block steer at 95%).
+ *
+ * File: {workspaceRoot}/_/.vscode/hermes-inbox/context.probe
+ * Format: key: value (one per line), plain text
+ */
+function _writeContextProbe(workspaceRoot: string | null, identity: QSemverResult): void {
+  if (!workspaceRoot) return;
+  const fs = require('fs') as typeof import('fs');
+  try {
+    const inboxDir = path.join(workspaceRoot, '_', '.vscode', 'hermes-inbox');
+    if (!fs.existsSync(inboxDir)) return; // only write if inbox already exists
+    const fillPct = Math.min(Math.round(identity.requestsSinceCompaction / 160 * 100), 100);
+    const content = [
+      `state: unknown`,
+      `context_pct: ${fillPct}`,
+      `rsc: ${identity.requestsSinceCompaction}`,
+      `patch: ${identity.patch}`,
+      `ts: ${new Date().toISOString()}`,
+    ].join('\n') + '\n';
+    fs.writeFileSync(path.join(inboxDir, 'context.probe'), content, 'utf-8');
+  } catch { /* non-fatal */ }
+}
+
 // ── Activate ─────────────────────────────────────────────────────────────────
 
 export function activate(context: vscode.ExtensionContext) {
   const workspaceHash = _getWorkspaceHash(context);
   const appDataBase = _getAppDataBase();
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
 
   // ─ Status bar items ─
   // Identity bar (qhoami#2): rightmost — shows KQ.patch
@@ -223,6 +252,8 @@ export function activate(context: vscode.ExtensionContext) {
       statusBarItem.tooltip = _statusBarTooltip(identity);
       contextBarItem.text = _contextBarLabel(identity);
       contextBarItem.tooltip = _contextBarTooltip(identity);
+      // Write context probe file for hermes inbox (context-aware dispatch).
+      _writeContextProbe(workspaceRoot, identity);
     } catch (e: any) {
       statusBarItem.text = '$(error) qhoami';
       statusBarItem.tooltip = `qhoami error: ${e.message}`;
