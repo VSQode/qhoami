@@ -36,7 +36,8 @@
 		"vscode:prepublish": "npm run compile",
 		"compile": "tsc -p ./",
 		"watch": "tsc -watch -p ./",
-		"package": "npx vsce package --allow-missing-repository -o qhoami.vsix"
+		"package": "npx vsce package --allow-missing-repository -o qhoami.vsix",
+		"cli": "node out/cli.js"
 	},
 	"devDependencies": {
 		"@types/node": "^22.10.5",
