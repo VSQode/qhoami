@@ -12,6 +12,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as crypto from 'crypto';
 
 function getAppDataPath(): string {
   if (process.platform === 'win32') {
@@ -80,9 +81,16 @@ const REBOOT_MARKERS = new Set([
   'Compacted conversation',
 ]);
 
-function extractReboots(data: any): { count: number; events: { index: number; at: string }[] } {
+function extractReboots(data: any): {
+  count: number;
+  groundTruth: number;
+  events: { index: number; at: string }[];
+  eventsGroundTruth: { index: number; at: string; summaryHash: string }[];
+} {
   const requests: any[] = data.requests || [];
   const events: { index: number; at: string }[] = [];
+  const eventsGroundTruth: { index: number; at: string; summaryHash: string }[] = [];
+  let prevHash: string | null = null;
 
   for (let i = 0; i < requests.length; i++) {
     const req = requests[i];
@@ -95,18 +103,30 @@ function extractReboots(data: any): { count: number; events: { index: number; at
       if (resp.kind === 'progressTaskSerialized' || resp.kind === 'progressTask') {
         const val = (resp.content || {}).value;
         if (REBOOT_MARKERS.has(val)) {
-          const at = requests[i].timestamp
-            ? new Date(requests[i].timestamp).toISOString()
-            : 'unknown';
+          const at = req.timestamp ? new Date(req.timestamp).toISOString() : 'unknown';
           events.push({ index: i, at });
           found = true;
+
+          // Ground-truth: count MD5 hash transitions of result.metadata.summary.text
+          // Phantom detection: if summary text is absent (cancelled compaction), skip entirely.
+          // Two consecutive compactions with identical summary text count as ONE reboot.
+          const summaryText: string | null = req.result?.metadata?.summary?.text ?? null;
+          if (summaryText !== null && summaryText !== undefined) {
+            const hash = crypto.createHash('md5').update(summaryText).digest('hex');
+            if (hash !== prevHash) {
+              eventsGroundTruth.push({ index: i, at, summaryHash: hash });
+              prevHash = hash;
+            }
+          }
+          // else: phantom (no summary text) — skip, do NOT update prevHash
+
           break;  // one reboot per request index — stop scanning this request's parts
         }
       }
       if (found) break;
     }
   }
-  return { count: events.length, events };
+  return { count: events.length, groundTruth: eventsGroundTruth.length, events, eventsGroundTruth };
 }
 
 function findSession(
@@ -197,7 +217,12 @@ function main(): void {
   }
 
   const { sessionData, hash, sessionPath } = found;
-  const { count: patch, events: reboots } = extractReboots(sessionData);
+  const {
+    count: rawMarkerPatch,
+    groundTruth: patch,
+    events: rawReboots,
+    eventsGroundTruth: reboots,
+  } = extractReboots(sessionData);
   const requests: any[] = sessionData.requests || [];
 
   const firstMessageAt = requests[0]?.timestamp
@@ -218,14 +243,16 @@ function main(): void {
     sessionPath,
     cq: `0.${birthOrder}.${patch}`,
     kq: kqStr ? `0.${kqStr}.${patch}` : null,
-    patch,
+    patch,             // ground-truth: MD5 hash-transition count (authoritative)
+    rawMarkerPatch,    // raw marker count (for diagnostics; may differ if phantom reboots exist)
     role,
     customTitle,
     sessionBirthOrder: birthOrder,
     totalSessionsInHash: totalSessions,
     requestCount: requests.length,
     firstMessageAt,
-    reboots,
+    reboots,           // ground-truth events (with summaryHash)
+    rawReboots,        // all marker events including phantoms
   };
 
   console.log(JSON.stringify(output, null, 2));
