@@ -2,7 +2,7 @@
 	"name": "qhoami",
 	"displayName": "qhoami",
 	"description": "Session ID extraction for VS Code chat agents",
-	"version": "0.1.5",
+	"version": "0.1.6",
 	"publisher": "vgm9",
 	"engines": {
 		"vscode": "^1.109.0"

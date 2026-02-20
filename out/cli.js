@@ -116,6 +116,14 @@ function getRoleName(kq) {
         return 'domain-specialist';
     return 'unknown';
 }
+// Compaction marker strings across VS Code versions:
+//   Pre-~Feb 2026: "Summarized conversation history"  (progressTaskSerialized)
+//   Post-~Feb 2026: "Compacted conversation"          (progressTaskSerialized)
+//   In-progress (NOT a completed reboot): "Compacting conversation..."
+const REBOOT_MARKERS = new Set([
+    'Summarized conversation history',
+    'Compacted conversation',
+]);
 function extractReboots(data) {
     const requests = data.requests || [];
     const events = [];
@@ -123,17 +131,24 @@ function extractReboots(data) {
         const req = requests[i];
         if (!req)
             continue; // sparse array slots from JSONL patch walk
+        // Deduplicate: only ONE event per request index, even if response array
+        // has multiple copies (JSONL kind=2 replace artifact).
+        let found = false;
         for (const resp of (req.response || [])) {
             // Support both old (progressTask) and new (progressTaskSerialized) formats
             if (resp.kind === 'progressTaskSerialized' || resp.kind === 'progressTask') {
                 const val = (resp.content || {}).value;
-                if (val === 'Summarized conversation history') {
+                if (REBOOT_MARKERS.has(val)) {
                     const at = requests[i].timestamp
                         ? new Date(requests[i].timestamp).toISOString()
                         : 'unknown';
                     events.push({ index: i, at });
+                    found = true;
+                    break; // one reboot per request index — stop scanning this request's parts
                 }
             }
+            if (found)
+                break;
         }
     }
     return { count: events.length, events };

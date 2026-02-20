@@ -2,10 +2,15 @@
 /**
  * qhoami - Session ID extraction for VS Code chat agents
  *
- * ONE TOOL, ONE JOB: Return the actual session ID from toolInvocationToken.sessionId
+ * ONE TOOL, ONE JOB: Return the actual session ID from toolInvocationToken.
  *
  * This is the ONLY way to deterministically get the current chat session ID.
  * All heuristics fail. This doesn't.
+ *
+ * History:
+ *   0.1.0-0.1.4 — used token.sessionId (VS Code <1.110)
+ *   0.1.5       — added token.sessionResource fallback (VS Code 1.110+)
+ *                 In 1.110, toolInvocationToken shape changed to {sessionResource: URI}
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -52,9 +57,9 @@ function deactivate() { }
 class QhoamiTool {
     async invoke(options, _token) {
         try {
-            const token = options.toolInvocationToken;
             // VS Code <1.110: token.sessionId (plain string UUID)
-            // VS Code >=1.110: token.sessionResource (URI object — {scheme,path,...})
+            // VS Code >=1.110: token.sessionResource (URI object — change in 1.110.0-insider)
+            const token = options.toolInvocationToken;
             let sessionId = token?.sessionId;
             let method = 'toolInvocationToken.sessionId';
             if (!sessionId) {
@@ -63,8 +68,9 @@ class QhoamiTool {
                     if (typeof res === 'object' && res.path) {
                         // URI object: path is "/UUID" — strip leading slash
                         sessionId = res.path.replace(/^\/+/, '');
-                    } else if (typeof res === 'string') {
-                        // string URI: strip scheme prefix
+                    }
+                    else if (typeof res === 'string') {
+                        // string URI: strip scheme prefix (e.g. "chatSession://UUID")
                         sessionId = res.replace(/^[a-z][a-z0-9+\-.]*:\/\/+/i, '');
                     }
                     method = 'toolInvocationToken.sessionResource';

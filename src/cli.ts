@@ -71,6 +71,15 @@ function getRoleName(kq: string | null): string | null {
   return 'unknown';
 }
 
+// Compaction marker strings across VS Code versions:
+//   Pre-~Feb 2026: "Summarized conversation history"  (progressTaskSerialized)
+//   Post-~Feb 2026: "Compacted conversation"          (progressTaskSerialized)
+//   In-progress (NOT a completed reboot): "Compacting conversation..."
+const REBOOT_MARKERS = new Set([
+  'Summarized conversation history',
+  'Compacted conversation',
+]);
+
 function extractReboots(data: any): { count: number; events: { index: number; at: string }[] } {
   const requests: any[] = data.requests || [];
   const events: { index: number; at: string }[] = [];
@@ -78,17 +87,23 @@ function extractReboots(data: any): { count: number; events: { index: number; at
   for (let i = 0; i < requests.length; i++) {
     const req = requests[i];
     if (!req) continue;  // sparse array slots from JSONL patch walk
+    // Deduplicate: only ONE event per request index, even if response array
+    // has multiple copies (JSONL kind=2 replace artifact).
+    let found = false;
     for (const resp of (req.response || [])) {
       // Support both old (progressTask) and new (progressTaskSerialized) formats
       if (resp.kind === 'progressTaskSerialized' || resp.kind === 'progressTask') {
         const val = (resp.content || {}).value;
-        if (val === 'Summarized conversation history') {
+        if (REBOOT_MARKERS.has(val)) {
           const at = requests[i].timestamp
             ? new Date(requests[i].timestamp).toISOString()
             : 'unknown';
           events.push({ index: i, at });
+          found = true;
+          break;  // one reboot per request index — stop scanning this request's parts
         }
       }
+      if (found) break;
     }
   }
   return { count: events.length, events };
