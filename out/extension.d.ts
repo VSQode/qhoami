@@ -11,6 +11,7 @@
  *   0.3.0       — Extension: adds workspaceHash + rebootCount to output
  *   0.4.0       — Extension: delegates parsing to lib.ts (no code duplication)
  *   0.5.0       — Extension: status bar item showing KQ.patch (qhoami#2)
+ *   0.6.0       — Extension: second status bar item with requestsSinceCompaction (qhoami#3)
  */
 import * as vscode from 'vscode';
 export declare function activate(context: vscode.ExtensionContext): void;

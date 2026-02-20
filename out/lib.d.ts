@@ -41,6 +41,8 @@ export interface QSemverResult {
     sessionBirthOrder: number;
     totalSessionsInHash: number;
     requestCount: number;
+    /** Requests processed since the most-recent compaction event (or since session start if no compactions). */
+    requestsSinceCompaction: number;
     firstMessageAt: string | null;
     lastRebootAt: string | null;
     reboots: RebootEvent[];

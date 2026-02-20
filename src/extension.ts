@@ -11,6 +11,7 @@
  *   0.3.0       — Extension: adds workspaceHash + rebootCount to output
  *   0.4.0       — Extension: delegates parsing to lib.ts (no code duplication)
  *   0.5.0       — Extension: status bar item showing KQ.patch (qhoami#2)
+ *   0.6.0       — Extension: second status bar item with requestsSinceCompaction (qhoami#3)
  */
 
 import * as vscode from 'vscode';
@@ -58,7 +59,52 @@ function _getWorkspaceHash(context: vscode.ExtensionContext): string | null {
   } catch { return null; }
 }
 
-// ── Status Bar (qhoami#2) ─────────────────────────────────────────────────────
+// ── Status Bar — Context Health (qhoami#3) ──────────────────────────────────
+
+const CONTEXT_WARN_THRESHOLD = 80;
+/** Denominator for context fill heuristic. 160 requests ≈ full 160K token context. */
+const CONTEXT_FILL_DENOMINATOR = 160;
+
+/**
+ * Context health bar label: "$(pulse) N" or "$(warning) N" when N >= 80
+ */
+function _contextBarLabel(identity: QSemverResult | null): string {
+  if (!identity || identity.sessionBirthOrder === -1) {
+    return '$(pulse) -';
+  }
+  const n = identity.requestsSinceCompaction;
+  const prefix = n >= CONTEXT_WARN_THRESHOLD ? '$(warning)' : '$(pulse)';
+  return `${prefix} ${n}`;
+}
+
+/**
+ * Context health bar tooltip with heuristic token estimate.
+ */
+function _contextBarTooltip(identity: QSemverResult | null): vscode.MarkdownString | string {
+  if (!identity || identity.sessionBirthOrder === -1) {
+    return 'qhoami context health: no data';
+  }
+  const n = identity.requestsSinceCompaction;
+  const fillPct = Math.min(Math.round(n / CONTEXT_FILL_DENOMINATOR * 100), 100);
+  const warnLine = n >= CONTEXT_WARN_THRESHOLD
+    ? `\n\n**⚠️ Approaching compaction zone** — ${n} requests since last compaction.`
+    : '';
+  const md = new vscode.MarkdownString(
+    `**qhoami — Context Health**\n\n` +
+    `| Field | Value |\n` +
+    `|---|---|\n` +
+    `| Requests since compaction | ${n} |\n` +
+    `| Context fill (heuristic) | ~${fillPct}% |\n` +
+    `| Total requests | ${identity.requestCount} |\n` +
+    `| Last compaction | ${identity.lastRebootAt ?? 'never'} |\n` +
+    `| Total reboots | ${identity.patch} |\n` +
+    warnLine,
+  );
+  md.isTrusted = true;
+  return md;
+}
+
+// ── Status Bar — Identity (qhoami#2) ─────────────────────────────────────────
 
 const SCCD_THRESHOLD = 12;
 
@@ -136,7 +182,8 @@ export function activate(context: vscode.ExtensionContext) {
   const workspaceHash = _getWorkspaceHash(context);
   const appDataBase = _getAppDataBase();
 
-  // ─ Status bar item (qhoami#2) ─
+  // ─ Status bar items ─
+  // Identity bar (qhoami#2): rightmost — shows KQ.patch
   const statusBarItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     100,
@@ -146,6 +193,16 @@ export function activate(context: vscode.ExtensionContext) {
   statusBarItem.tooltip = 'qhoami: reading identity...';
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
+
+  // Context health bar (qhoami#3): left of identity — shows requestsSinceCompaction
+  const contextBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    99,
+  );
+  contextBarItem.text = '$(pulse) -';
+  contextBarItem.tooltip = 'qhoami context health: reading...';
+  contextBarItem.show();
+  context.subscriptions.push(contextBarItem);
 
   // ─ Show identity command (click target) ─
   let lastIdentity: QSemverResult | null = null;
@@ -164,9 +221,12 @@ export function activate(context: vscode.ExtensionContext) {
       lastIdentity = identity;
       statusBarItem.text = _statusBarLabel(identity);
       statusBarItem.tooltip = _statusBarTooltip(identity);
+      contextBarItem.text = _contextBarLabel(identity);
+      contextBarItem.tooltip = _contextBarTooltip(identity);
     } catch (e: any) {
       statusBarItem.text = '$(error) qhoami';
       statusBarItem.tooltip = `qhoami error: ${e.message}`;
+      contextBarItem.text = '$(error) ctx';
     }
   }, 2000); // 2s delay to let workspace hash resolve
 

@@ -364,6 +364,8 @@ function computeQSemver(opts) {
         ? new Date(target.firstMessageTime).toISOString()
         : null;
     const lastRebootAt = reboots[reboots.length - 1]?.at ?? null;
+    const lastRebootIndex = reboots[reboots.length - 1]?.index ?? -1;
+    const requestsSinceCompaction = target.requestCount - (lastRebootIndex + 1);
     return {
         sessionId: target.id,
         workspaceHash,
@@ -376,6 +378,7 @@ function computeQSemver(opts) {
         sessionBirthOrder: birthOrder,
         totalSessionsInHash: sessions.length,
         requestCount: target.requestCount,
+        requestsSinceCompaction,
         firstMessageAt,
         lastRebootAt,
         reboots,
@@ -394,6 +397,7 @@ function _emptyResult(workspaceHash, sessions, sessionId) {
         sessionBirthOrder: -1,
         totalSessionsInHash: sessions?.length ?? 0,
         requestCount: 0,
+        requestsSinceCompaction: 0,
         firstMessageAt: null,
         lastRebootAt: null,
         reboots: [],

@@ -51,6 +51,8 @@ export interface QSemverResult {
   sessionBirthOrder: number;
   totalSessionsInHash: number;
   requestCount: number;
+  /** Requests processed since the most-recent compaction event (or since session start if no compactions). */
+  requestsSinceCompaction: number;
   firstMessageAt: string | null;
   lastRebootAt: string | null;
   reboots: RebootEvent[];
@@ -397,6 +399,8 @@ export function computeQSemver(opts?: QSemverOptions): QSemverResult {
     ? new Date(target.firstMessageTime).toISOString()
     : null;
   const lastRebootAt = reboots[reboots.length - 1]?.at ?? null;
+  const lastRebootIndex = reboots[reboots.length - 1]?.index ?? -1;
+  const requestsSinceCompaction = target.requestCount - (lastRebootIndex + 1);
 
   return {
     sessionId: target.id,
@@ -410,6 +414,7 @@ export function computeQSemver(opts?: QSemverOptions): QSemverResult {
     sessionBirthOrder: birthOrder,
     totalSessionsInHash: sessions.length,
     requestCount: target.requestCount,
+    requestsSinceCompaction,
     firstMessageAt,
     lastRebootAt,
     reboots,
@@ -433,6 +438,7 @@ function _emptyResult(
     sessionBirthOrder: -1,
     totalSessionsInHash: sessions?.length ?? 0,
     requestCount: 0,
+    requestsSinceCompaction: 0,
     firstMessageAt: null,
     lastRebootAt: null,
     reboots: [],
